@@ -7,6 +7,10 @@ const db = new sqlite3.Database(dbPath, (err) => {
   else console.log('Conectado a SQLite');
 });
 
+// db.run("DROP TABLE IF EXISTS inventory", (err) => {
+//   if (err) console.error(err);
+//   else console.log("🗑️ Tabla inventory eliminada");
+// });
 // Crear tablas si no existen
 db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS users (
@@ -24,13 +28,14 @@ db.serialize(() => {
     type TEXT,
     unit TEXT,
     stock INTEGER,
-    costPerUnit REAL
+    costPerUnit REAL,
+    salary REAL NOT NULL DEFAULT 0
   )`);
 
   db.run(`CREATE TABLE IF NOT EXISTS clinical_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     patientName TEXT,
-    workerId INTEGER,
+    worker TEXT NOT NULL,
     dateTime TEXT,
     service TEXT,
     totalCharged REAL,
@@ -57,16 +62,16 @@ db.run(`
   )
 `);
 
-db.run(`
-  CREATE TABLE IF NOT EXISTS inventory (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL,
-  type TEXT,
-  unit TEXT,
-  stock INTEGER NOT NULL DEFAULT 0,
-  costPerUnit REAL NOT NULL
-)
-`);
+// db.run(`
+//   CREATE TABLE IF NOT EXISTS inventory (
+//   id INTEGER PRIMARY KEY AUTOINCREMENT,
+//   name TEXT NOT NULL,
+//   type TEXT,
+//   unit TEXT,
+//   stock INTEGER NOT NULL DEFAULT 0,
+//   costPerUnit REAL NOT NULL
+// )
+// `);
 
 });
 

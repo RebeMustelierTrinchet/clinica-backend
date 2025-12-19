@@ -36,7 +36,8 @@ router.post("/", async (req, res) => {
     type = "", 
     unit = "", 
     stock = 0, 
-    costPerUnit = 0
+    costPerUnit = 0,
+    salary = 0
   } = req.body;
 
   if (!name || typeof name !== "string") {
@@ -53,8 +54,8 @@ router.post("/", async (req, res) => {
 
   try {
     db.run(
-      "INSERT INTO inventory (name, type, unit, stock, costPerUnit) VALUES (?, ?, ?, ?, ?)", // 5 placeholders
-      [name, type, unit, stock, costPerUnit], // 5 valores
+      "INSERT INTO inventory (name, type, unit, stock, costPerUnit, salary) VALUES (?, ?, ?, ?, ?, ?)", // 6 placeholders
+      [name, type, unit, stock, costPerUnit, salary], // 6 valores
       function (err) {
         if (err) {
           console.error("❌ Error en INSERT:", err.message);
@@ -67,7 +68,8 @@ router.post("/", async (req, res) => {
           type,
           unit,
           stock,
-          costPerUnit
+          costPerUnit,
+          salary
         });
       }
     );
@@ -85,7 +87,8 @@ router.put("/:id", async (req, res) => {
     type = "", 
     unit = "", 
     stock = 0,
-    costPerUnit = 0
+    costPerUnit = 0,
+    salary = 0
   } = req.body;
 
   // Validación
@@ -101,8 +104,8 @@ router.put("/:id", async (req, res) => {
 
   try {
     db.run(
-      "UPDATE inventory SET name=?, type=?, unit=?, stock=?, costPerUnit=? WHERE id=?", // Sin coma extra
-      [name, type, unit, stock, costPerUnit, id],
+      "UPDATE inventory SET name=?, type=?, unit=?, stock=?, costPerUnit=?,salary=? WHERE id=?", // Sin coma extra
+      [name, type, unit, stock, costPerUnit, salary, id],
       function (err) {
         if (err) {
           console.error("❌ Error en UPDATE:", err.message);

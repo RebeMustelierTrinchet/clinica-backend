@@ -85,21 +85,32 @@ router.get("/status/:userId", (req, res) => {
 });
 
 // ========================
-// GET /hours → ver todas las horas (admin)
-// ========================
+// // GET /hours → ver todas las horas (admin)
+// // ========================
+// router.get("/", (req, res) => {
+//   const query = `
+//     SELECT t.id, t.userId, u.name, u.username, t.checkIn, t.checkOut
+//     FROM times t
+//     LEFT JOIN users u ON t.userId = u.id
+//     ORDER BY t.checkIn DESC
+//   `;
+//   db.all(query, [], (err, rows) => {
+//     if (err) return res.status(500).json({ error: err.message });
+//     res.json(rows);
+//   });
+// });
 router.get("/", (req, res) => {
   const query = `
-    SELECT t.id, t.userId, u.name, u.username, t.checkIn, t.checkOut
-    FROM times t
-    LEFT JOIN users u ON t.userId = u.id
-    ORDER BY t.checkIn DESC
+    SELECT id, name, username, role, salary
+    FROM users
+    ORDER BY id ASC
   `;
+
   db.all(query, [], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json(rows);
   });
 });
-
 // ========================
 // GET /hours/history → ver historial con horas y pago
 // ========================

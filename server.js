@@ -12,6 +12,7 @@ const hoursRoutes = require("./routes/hours");
 const inventoryRouter = require("./routes/inventory");
 const clinicalRoutes = require("./routes/clinicalHistory"); 
 const timeRoutes = require("./routes/time");
+const reportsRoutes = require("./routes/reports");
 
 // Usar rutas
 app.use("/auth", authRoutes);
@@ -20,6 +21,7 @@ app.use("/hours", hoursRoutes);
 app.use("/clinical", clinicalRoutes);
 app.use("/inventory", inventoryRouter);
 app.use("/time", timeRoutes);
+app.use("/reports", reportsRoutes);
 
 
 
@@ -39,4 +41,5 @@ app.listen(PORT, () => {
   console.log(`   GET  /hours/status/:userId`);
   console.log(`   POST /hours/clock-in`);
   console.log(`   POST /hours/clock-out`);
+
 });
