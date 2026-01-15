@@ -1,8 +1,17 @@
+require("dotenv").config();
+
 const express = require("express");
 const cors = require("cors");
 
 const app = express();
-app.use(cors());
+
+app.use(
+  cors({
+    origin: process.env.CLIENT_URL,
+    credentials: true,
+  })
+);
+
 app.use(express.json());
 
 // Importar rutas
@@ -23,23 +32,12 @@ app.use("/inventory", inventoryRouter);
 app.use("/time", timeRoutes);
 app.use("/reports", reportsRoutes);
 
-
-
 app.get("/", (req, res) => {
   res.send("Servidor Express funcionando!");
 });
 
+const PORT = process.env.PORT || 5000;
 
-const PORT = 5000;
 app.listen(PORT, () => {
-  console.log(`✅ Servidor funcionando en http://localhost:${PORT}`);
-  console.log(`📊 Rutas disponibles:`);
-  console.log(`   GET  /test`);
-  console.log(`   GET  /hours/test/:userId`);
-  console.log(`   GET  /hours/user-weekly/:userId`);
-  console.log(`   GET  /hours/history`);
-  console.log(`   GET  /hours/status/:userId`);
-  console.log(`   POST /hours/clock-in`);
-  console.log(`   POST /hours/clock-out`);
-
+  console.log(`✅ Servidor funcionando en el puerto ${PORT}`);
 });
