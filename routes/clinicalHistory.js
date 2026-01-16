@@ -1,124 +1,69 @@
-// const express = require("express");
-// const router = express.Router();
-
-// let clinicalHistory = require("../models/clinicalHistory");
-// let items = require("../models/items");
-
-// // GET - ver historial completo
-// router.get("/", (req, res) => {
-//   res.json(clinicalHistory);
-// });
-
-// // POST - agregar registro clínico
-// router.post("/", (req, res) => {
-//   const { patientName, workerId, dateTime, itemsUsed, service, totalCharged } = req.body;
-
-//   // Validar que los items existan en el inventario
-//   for (let used of itemsUsed) {
-//     const item = items.find(i => i.id === used.itemId);
-//     if (!item) return res.status(400).json({ error: `Item con id ${used.itemId} no existe` });
-
-//     if (item.stock < used.qty) {
-//       return res.status(400).json({
-//         error: `Stock insuficiente para ${item.name}. Disponible: ${item.stock}`
-//       });
-//     }
-//   }
-
-//   // Restar del inventario
-//   for (let used of itemsUsed) {
-//     const item = items.find(i => i.id === used.itemId);
-//     item.stock -= used.qty;
-//   }
-
-//   const newRecord = {
-//     id: clinicalHistory.length + 1,
-//     patientName,
-//     workerid,
-//     dateTime,
-//     itemsUsed,
-//     service,
-//     totalCharged
-//   };
-
-//   clinicalHistory.push(newRecord);
-
-//   res.json({
-//     message: "Registro clínico creado correctamente",
-//     record: newRecord,
-//     updatedInventory: items
-//   });
-// });
-
-// module.exports = router;
+// routes/clinicalHistory.js
 const express = require("express");
 const router = express.Router();
+const pool = require("../db/index"); // tu pool PostgreSQL
 
-let clinicalHistory = require("../models/clinicalHistory");
-let items = require("../models/items");
-
-// GET - ver historial completo
-router.get("/", (req, res) => {
-  res.json(clinicalHistory);
+// GET - historial completo
+router.get("/", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT * FROM clinical_history ORDER BY dateTime DESC");
+    res.json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ msg: "Error al obtener historial clínico" });
+  }
 });
 
 // POST - agregar registro clínico
-router.post("/", (req, res) => {
-  const {
-    patientName,
-    worker,        // ← STRING
-    dateTime,
-    itemsUsed,
-    service,
-    totalCharged
-  } = req.body;
+router.post("/", async (req, res) => {
+  const { patientName, worker, dateTime, itemsUsed, service, totalCharged } = req.body;
 
-  let serviceSalary = 0;
+  try {
+    let serviceSalary = 0;
 
-  // 1️⃣ Validar items y stock
-  for (let used of itemsUsed) {
-    const item = items.find(i => i.id === used.itemId);
-    if (!item) {
-      return res.status(400).json({
-        error: `Item con id ${used.itemId} no existe`
-      });
+    // 1️⃣ Validar items y stock
+    for (let used of itemsUsed) {
+      const itemResult = await pool.query("SELECT * FROM inventory WHERE id = $1", [used.itemId]);
+      const item = itemResult.rows[0];
+
+      if (!item) return res.status(400).json({ error: `Item con id ${used.itemId} no existe` });
+      if (item.stock < used.qty)
+        return res.status(400).json({ error: `Stock insuficiente para ${item.name}. Disponible: ${item.stock}` });
+
+      serviceSalary += used.qty * (item.salary || 0);
     }
 
-    if (item.stock < used.qty) {
-      return res.status(400).json({
-        error: `Stock insuficiente para ${item.name}. Disponible: ${item.stock}`
-      });
+    // 2️⃣ Restar stock
+    for (let used of itemsUsed) {
+      await pool.query("UPDATE inventory SET stock = stock - $1 WHERE id = $2", [used.qty, used.itemId]);
     }
 
-    // 💰 calcular salario
-    serviceSalary += used.qty * (item.salary || 0);
+    // 3️⃣ Crear registro clínico
+    const newRecordQuery = `
+      INSERT INTO clinical_history
+      (patientName, worker, dateTime, service, totalCharged, itemsUsed)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING *
+    `;
+    const newRecordResult = await pool.query(newRecordQuery, [
+      patientName,
+      worker,
+      dateTime || new Date(),
+      service,
+      totalCharged,
+      JSON.stringify(itemsUsed)
+    ]);
+
+    const newRecord = newRecordResult.rows[0];
+
+    res.json({
+      message: "Registro clínico creado correctamente",
+      record: { ...newRecord, serviceSalary },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ msg: "Error al crear registro clínico" });
   }
-
-  // 2️⃣ Descontar inventario
-  for (let used of itemsUsed) {
-    const item = items.find(i => i.id === used.itemId);
-    item.stock -= used.qty;
-  }
-
-  // 3️⃣ Crear registro clínico
-  const newRecord = {
-    id: clinicalHistory.length + 1,
-    patientName,
-    worker,              // ← string
-    dateTime,
-    service,
-    totalCharged,
-    itemsUsed,
-    serviceSalary        // ← ⭐ CLAVE
-  };
-
-  clinicalHistory.push(newRecord);
-
-  res.json({
-    message: "Registro clínico creado correctamente",
-    record: newRecord,
-    updatedInventory: items
-  });
 });
 
 module.exports = router;

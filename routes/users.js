@@ -1,132 +1,81 @@
-// hours.js
 const express = require("express");
+const bcrypt = require("bcryptjs");
+const pool = require("../db/index");
+
 const router = express.Router();
-const db = require("../db"); // Asegúrate de que la ruta sea correcta
 
-// Crear tabla times si no existe
-db.run(`
-  CREATE TABLE IF NOT EXISTS times (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    userId INTEGER,
-    checkIn TEXT,
-    checkOut TEXT,
-    FOREIGN KEY(userId) REFERENCES users(id)
-  )
-`);
-
-// ========================
-// POST /hours/clock-in → registrar entrada
-// ========================
-router.post("/clock-in", (req, res) => {
-  const { userId, checkIn } = req.body;
-  
-  // Revisar si ya hay entrada hoy
-  const today = new Date().toISOString().split("T")[0];
-  const checkQuery = `SELECT * FROM times WHERE userId = ? AND DATE(checkIn) = ?`;
-  db.get(checkQuery, [userId, today], (err, row) => {
-    if (err) return res.status(500).json({ error: err.message });
-    if (row) return res.status(400).json({ msg: "Ya marcaste entrada hoy" });
-
-    // Insertar entrada
-    const query = `INSERT INTO times (userId, checkIn, checkOut) VALUES (?, ?, NULL)`;
-    db.run(query, [userId, checkIn], function(err) {
-      if (err) return res.status(500).json({ error: err.message });
-      res.json({ msg: "Entrada registrada", id: this.lastID });
-    });
-  });
+// GET /users
+router.get("/", async (req, res) => {
+  const { rows } = await pool.query(
+    "SELECT id, name, username, role, salary FROM users ORDER BY id"
+  );
+  res.json(rows);
 });
 
-// ========================
-// POST /hours/clock-out → registrar salida
-// ========================
-router.post("/clock-out", (req, res) => {
-  const { userId, checkOut } = req.body;
+// GET /users/:id
+router.get("/:id", async (req, res) => {
+  const { id } = req.params;
 
-  const query = `
-    UPDATE times 
-    SET checkOut = ? 
-    WHERE userId = ? AND checkOut IS NULL
-  `;
+  const { rows } = await pool.query(
+    "SELECT id, name, username, role, salary FROM users WHERE id = $1",
+    [id]
+  );
 
-  db.run(query, [checkOut, userId], function(err) {
-    if (err) return res.status(500).json({ error: err.message });
-    if (this.changes === 0) return res.status(404).json({ msg: "No se encontró entrada pendiente" });
-    res.json({ msg: "Salida registrada" });
-  });
+  if (rows.length === 0)
+    return res.status(404).json({ msg: "Usuario no encontrado" });
+
+  res.json(rows[0]);
 });
 
-// ========================
-// GET /hours/status/:userId → saber si el usuario ya marcó hoy
-// ========================
-router.get("/status/:userId", (req, res) => {
-  const { userId } = req.params;
-  const today = new Date().toISOString().split("T")[0];
+// POST /users  ✅ (ESTA ES LA QUE TE FALTABA)
+router.post("/", async (req, res) => {
+  const { name, username, password, role, salary } = req.body;
 
-  const query = `SELECT * FROM times WHERE userId = ? AND DATE(checkIn) = ?`;
-  db.get(query, [userId, today], (err, row) => {
-    if (err) return res.status(500).json({ error: err.message });
+  if (!name || !username || !password)
+    return res.status(400).json({ msg: "Faltan datos" });
 
-    if (!row) {
-      return res.json({
-        status: "none",       // no ha marcado entrada
-        canClockIn: true,
-        canClockOut: false
-      });
+  const hash = bcrypt.hashSync(password, 10);
+
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO users (name, username, password, role, salary)
+       VALUES ($1,$2,$3,$4,$5)
+       RETURNING id, name, username, role`,
+      [name, username, hash, role || "worker", salary || 0]
+    );
+
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    if (err.code === "23505")
+      return res.status(400).json({ msg: "Usuario ya existe" });
+
+    res.status(500).json({ msg: "Error del servidor" });
+  }
+});
+// DELETE /users/:id
+router.delete("/:id", async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const result = await pool.query(
+      "DELETE FROM users WHERE id = $1 RETURNING *",
+      [id]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ msg: "Usuario no encontrado" });
     }
 
     res.json({
-      status: row.checkOut ? "completed" : "clock-in",
-      entryTime: row.checkIn,
-      exitTime: row.checkOut || null,
-      canClockIn: false,
-      canClockOut: !row.checkOut
+      success: true,
+      msg: "Usuario eliminado",
+      user: result.rows[0]
     });
-  });
+  } catch (err) {
+    console.error("❌ Error DELETE /users/:id", err);
+    res.status(500).json({ msg: "Error del servidor" });
+  }
 });
 
-// ========================
-// // GET /hours → ver todas las horas (admin)
-// // ========================
-// router.get("/", (req, res) => {
-//   const query = `
-//     SELECT t.id, t.userId, u.name, u.username, t.checkIn, t.checkOut
-//     FROM times t
-//     LEFT JOIN users u ON t.userId = u.id
-//     ORDER BY t.checkIn DESC
-//   `;
-//   db.all(query, [], (err, rows) => {
-//     if (err) return res.status(500).json({ error: err.message });
-//     res.json(rows);
-//   });
-// });
-router.get("/", (req, res) => {
-  const query = `
-    SELECT id, name, username, role, salary
-    FROM users
-    ORDER BY id ASC
-  `;
-
-  db.all(query, [], (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
-    res.json(rows);
-  });
-});
-// ========================
-// GET /hours/history → ver historial con horas y pago
-// ========================
-router.get("/history", (req, res) => {
-  const query = `
-    SELECT t.id, t.userId, u.name, u.username, t.checkIn, t.checkOut,
-           ROUND((julianday(t.checkOut) - julianday(t.checkIn)) * 24, 2) AS hours,
-           ROUND(((julianday(t.checkOut) - julianday(t.checkIn)) * 24) * u.salary, 2) AS totalPay
-    FROM times t
-    LEFT JOIN users u ON t.userId = u.id
-    ORDER BY t.checkIn DESC
-  `;
-  db.all(query, [], (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
-    res.json(rows);
-  });
-});
 
 module.exports = router;

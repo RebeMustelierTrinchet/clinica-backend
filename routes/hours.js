@@ -1,256 +1,192 @@
 const express = require("express");
-const db = require("../db"); // Tu conexión SQLite
+const pool = require("../db/index");
 const router = express.Router();
 
-// Crear tabla times si no existe
-db.run(`
-  CREATE TABLE IF NOT EXISTS times (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    userId INTEGER,
-    checkIn TEXT,
-    checkOut TEXT,
-    FOREIGN KEY(userId) REFERENCES users(id)
-  )
-`);
+// ========================
+// POST /hours/clock-in
+// ========================
+router.post("/clock-in", async (req, res) => {
+  try {
+    const { userId, checkIn } = req.body;
+    if (!userId || !checkIn)
+      return res.status(400).json({ success: false, msg: "Faltan datos" });
 
-// Clock In
-// router.post("/clock-in", (req, res) => {
-//   const { userId, checkIn } = req.body;
-//   const today = new Date().toISOString().split("T")[0];
+    const today = new Date().toISOString().split("T")[0];
 
-//   db.get(`SELECT * FROM times WHERE userId = ? AND DATE(checkIn) = ?`, [userId, today], (err, row) => {
-//     if (err) return res.status(500).json({ error: err.message });
-//     if (row) return res.status(400).json({ msg: "Ya marcaste entrada hoy" });
+    // Turno abierto
+    const openShift = await pool.query(
+      `SELECT * FROM times WHERE user_id = $1 AND check_out IS NULL`,
+      [userId]
+    );
 
-//     db.run(`INSERT INTO times (userId, checkIn) VALUES (?, ?)`, [userId, checkIn], function(err) {
-//       if (err) return res.status(500).json({ error: err.message });
-//       res.json({ msg: "Entrada registrada", id: this.lastID });
-//     });
-//   });
-// });
-
-// Clock In mejorado
-router.post("/clock-in", (req, res) => {
-  const { userId, checkIn } = req.body;
-  const today = new Date().toISOString().split("T")[0];
-
-  // Primero, buscar cualquier registro pendiente (sin checkout)
-  db.get(
-    `SELECT * FROM times 
-     WHERE userId = ? 
-     AND checkOut IS NULL`,
-    [userId],
-    (err, pendingRow) => {
-      if (err) return res.status(500).json({ error: err.message });
-      
-      // Si ya hay un registro pendiente, NO permitir nuevo check-in
-      if (pendingRow) {
-        return res.status(400).json({ 
-          success: false,
-          msg: "Ya tienes un turno en curso. Debes hacer check-out primero.",
-          pendingRecord: pendingRow
-        });
-      }
-      
-      // Verificar si ya hizo check-in hoy
-      db.get(
-        `SELECT * FROM times 
-         WHERE userId = ? 
-         AND DATE(checkIn) = ?`,
-        [userId, today],
-        (err2, todayRow) => {
-          if (err2) return res.status(500).json({ error: err2.message });
-          
-          if (todayRow) {
-            return res.status(400).json({ 
-              success: false,
-              msg: "Ya registraste entrada hoy. Si necesitas un nuevo turno, contacta al administrador.",
-              existingRecord: todayRow
-            });
-          }
-          
-          // Insertar nuevo registro
-          db.run(
-            `INSERT INTO times (userId, checkIn) VALUES (?, ?)`,
-            [userId, checkIn],
-            function(err3) {
-              if (err3) return res.status(500).json({ error: err3.message });
-              res.json({ 
-                success: true,
-                msg: "Entrada registrada", 
-                id: this.lastID,
-                checkIn: checkIn
-              });
-            }
-          );
-        }
-      );
+    if (openShift.rows.length > 0) {
+      return res.status(400).json({
+        success: false,
+        msg: "Tienes un turno en curso",
+        record: openShift.rows[0]
+      });
     }
-  );
-});
 
-// Clock Out
-router.post("/clock-out", (req, res) => {
-  const { userId, checkOut } = req.body;
-  db.run(`UPDATE times SET checkOut = ? WHERE userId = ? AND checkOut IS NULL`, [checkOut, userId], function(err) {
-    if (err) return res.status(500).json({ error: err.message });
-    if (this.changes === 0) return res.status(404).json({ msg: "No se encontró entrada pendiente" });
-    res.json({ msg: "Salida registrada" });
-  });
-});
+    // Entrada hoy
+    const todayShift = await pool.query(
+      `SELECT * FROM times WHERE user_id = $1 AND DATE(check_in) = $2`,
+      [userId, today]
+    );
 
-// Estado de hoy
-router.get("/status/:userId", (req, res) => {
-  const { userId } = req.params;
-  const today = new Date().toISOString().split("T")[0];
+    if (todayShift.rows.length > 0) {
+      return res.status(400).json({
+        success: false,
+        msg: "Ya registraste entrada hoy",
+        record: todayShift.rows[0]
+      });
+    }
 
-  db.get(`SELECT * FROM times WHERE userId = ? AND DATE(checkIn) = ?`, [userId, today], (err, row) => {
-    if (err) return res.status(500).json({ error: err.message });
-    if (!row) return res.json({ status: "none", canClockIn: true, canClockOut: false });
+    // Insert
+    const { rows } = await pool.query(
+      `INSERT INTO times (user_id, check_in)
+       VALUES ($1, $2) RETURNING *`,
+      [userId, checkIn]
+    );
+
     res.json({
-      status: row.checkOut ? "completed" : "clock-in",
-      entryTime: row.checkIn,
-      exitTime: row.checkOut || null,
-      canClockIn: false,
-      canClockOut: !row.checkOut
+      success: true,
+      msg: "Entrada registrada",
+      record: rows[0]
     });
-  });
+  } catch (err) {
+    console.error("❌ clock-in:", err);
+    res.status(500).json({ success: false, msg: "Error del servidor" });
+  }
 });
 
-// Historial completo (admin)
-router.get("/history", (req, res) => {
-  const query = `
-    SELECT t.id, t.userId, u.name, u.username, t.checkIn, t.checkOut,
-           ROUND((julianday(t.checkOut) - julianday(t.checkIn)) * 24, 2) AS hours,
-           ROUND(((julianday(t.checkOut) - julianday(t.checkIn)) * 24) * u.salary, 2) AS totalPay
-    FROM times t
-    LEFT JOIN users u ON t.userId = u.id
-    ORDER BY t.checkIn DESC
-  `;
-  db.all(query, [], (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
-    res.json(rows);
-  });
+// ========================
+// POST /hours/clock-out
+// ========================
+router.post("/clock-out", async (req, res) => {
+  try {
+    const { userId, checkOut } = req.body;
+    if (!userId || !checkOut)
+      return res.status(400).json({ success: false, msg: "Faltan datos" });
+
+    const { rows } = await pool.query(
+      `UPDATE times
+       SET check_out = $1
+       WHERE user_id = $2 AND check_out IS NULL
+       RETURNING *`,
+      [checkOut, userId]
+    );
+
+    if (rows.length === 0)
+      return res.status(404).json({
+        success: false,
+        msg: "No hay turno activo"
+      });
+
+    res.json({
+      success: true,
+      msg: "Salida registrada",
+      record: rows[0]
+    });
+  } catch (err) {
+    console.error("❌ clock-out:", err);
+    res.status(500).json({ success: false, msg: "Error del servidor" });
+  }
 });
 
-// Historial por usuario
-router.get("/user/:userId", (req, res) => {
-  const { userId } = req.params;
-  const query = `
-    SELECT t.id, t.userId, u.name, u.username, t.checkIn, t.checkOut,
-           ROUND((julianday(t.checkOut) - julianday(t.checkIn)) * 24, 2) AS hours,
-           ROUND(((julianday(t.checkOut) - julianday(t.checkIn)) * 24) * u.salary, 2) AS totalPay
-    FROM times t
-    LEFT JOIN users u ON t.userId = u.id
-    WHERE t.userId = ?
-    ORDER BY t.checkIn DESC
-  `;
-  db.all(query, [userId], (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
-    res.json(rows);
-  });
+// ========================
+// GET /hours/status/:userId
+// ========================
+router.get("/status/:userId", async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const today = new Date().toISOString().split("T")[0];
 
-  // En tu archivo de rutas /hours
-router.get("/user-weekly/:userId", (req, res) => {
-  const { userId } = req.params;
-  
-  const query = `
-    WITH RECURSIVE dates AS (
+    const { rows } = await pool.query(
+      `SELECT * FROM times WHERE user_id = $1 AND DATE(check_in) = $2`,
+      [userId, today]
+    );
+
+    if (rows.length === 0) {
+      return res.json({
+        status: "none",
+        canClockIn: true,
+        canClockOut: false
+      });
+    }
+
+    const row = rows[0];
+
+    res.json({
+      status: row.check_out ? "completed" : "clock-in",
+      entryTime: row.check_in,
+      exitTime: row.check_out,
+      canClockIn: false,
+      canClockOut: !row.check_out
+    });
+  } catch (err) {
+    console.error("❌ status:", err);
+    res.status(500).json({ msg: "Error del servidor" });
+  }
+});
+
+// ========================
+// GET /hours/history (admin)
+// ========================
+router.get("/history", async (req, res) => {
+  try {
+    const query = `
       SELECT 
         t.id,
-        t.userId,
+        t.userid AS "userId",
         u.name,
         u.username,
         u.salary,
-        t.checkIn,
-        t.checkOut,
-        -- Calcular horas trabajadas
-        CASE 
-          WHEN t.checkOut IS NOT NULL 
-          THEN ROUND((julianday(t.checkOut) - julianday(t.checkIn)) * 24, 2)
-          ELSE 0 
-        END as hours,
-        -- Calcular fecha sin hora (para agrupar por día)
-        DATE(t.checkIn) as workDate,
-        -- Calcular inicio de semana (lunes)
-        DATE(t.checkIn, 'weekday 1') as weekStart
+        t.checkin  AS "checkIn",
+        t.checkout AS "checkOut",
+        CAST(
+          EXTRACT(EPOCH FROM (t.checkout - t.checkin)) / 3600
+          AS NUMERIC(10,2)
+        ) AS hours,
+        CAST(
+          (EXTRACT(EPOCH FROM (t.checkout - t.checkin)) / 3600) * u.salary
+          AS NUMERIC(10,2)
+        ) AS "totalPay"
       FROM times t
-      LEFT JOIN users u ON t.userId = u.id
-      WHERE t.userId = ? AND t.checkOut IS NOT NULL
-      ORDER BY t.checkIn DESC
-    )
-    SELECT 
-      weekStart,
-      -- Formatear semana como "Lun DD/MM - Dom DD/MM"
-      weekStart || ' - ' || DATE(weekStart, '+6 days') as weekRange,
-      -- Agrupar por días dentro de la semana
-      GROUP_CONCAT(
-        workDate || ': ' || hours || ' horas',
-        ' | '
-      ) as dailyHours,
-      -- Sumar total de horas de la semana
-      ROUND(SUM(hours), 2) as totalHours,
-      -- Calcular pago total de la semana
-      ROUND(SUM(hours) * MIN(salary), 2) as totalPay,
-      -- Contar días trabajados
-      COUNT(DISTINCT workDate) as daysWorked
-    FROM dates
-    GROUP BY weekStart
-    ORDER BY weekStart DESC;
-  `;
-
-  db.all(query, [userId], (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
-    
-    // Si también quieres los registros diarios detallados
-    const detailedQuery = `
-      SELECT 
-        t.id,
-        DATE(t.checkIn) as date,
-        strftime('%Y-%m-%d', t.checkIn) as formattedDate,
-        strftime('%A', t.checkIn) as dayName,
-        t.checkIn,
-        t.checkOut,
-        ROUND((julianday(t.checkOut) - julianday(t.checkIn)) * 24, 2) as hours,
-        ROUND(((julianday(t.checkOut) - julianday(t.checkIn)) * 24) * u.salary, 2) as dailyPay,
-        DATE(t.checkIn, 'weekday 1') as weekStart
-      FROM times t
-      LEFT JOIN users u ON t.userId = u.id
-      WHERE t.userId = ? AND t.checkOut IS NOT NULL
-      ORDER BY t.checkIn DESC
+      JOIN users u ON u.id = t.userid
+      WHERE t.checkout IS NOT NULL
+      ORDER BY t.checkin DESC
     `;
 
-    db.all(detailedQuery, [userId], (err2, dailyRecords) => {
-      if (err2) return res.status(500).json({ error: err2.message });
-      
-      // Organizar registros diarios por semana
-      const weeklyData = rows.map(week => {
-        const weekDailyRecords = dailyRecords.filter(record => 
-          record.weekStart === week.weekStart
-        );
-        
-        return {
-          ...week,
-          dailyRecords: weekDailyRecords,
-          weekStartDate: week.weekStart,
-          weekEndDate: new Date(new Date(week.weekStart).getTime() + 6 * 24 * 60 * 60 * 1000)
-            .toISOString().split('T')[0]
-        };
-      });
-
-      res.json({
-        userId,
-        weeklySummary: weeklyData,
-        dailyRecords, // Todos los registros diarios
-        totals: {
-          totalHours: weeklyData.reduce((sum, week) => sum + week.totalHours, 0),
-          totalPay: weeklyData.reduce((sum, week) => sum + week.totalPay, 0),
-          totalWeeks: weeklyData.length
-        }
-      });
-    });
-  });
+    const { rows } = await pool.query(query);
+    res.json(rows);
+  } catch (err) {
+    console.error("❌ history:", err);
+    res.status(500).json({ msg: "Error del servidor" });
+  }
 });
+
+// ========================
+// GET /hours/user/:userId
+// ========================
+router.get("/user/:userId", async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const { rows } = await pool.query(`
+      SELECT 
+        t.id,
+        t.check_in,
+        t.check_out,
+        ROUND(EXTRACT(EPOCH FROM (t.check_out - t.check_in))/3600, 2) AS hours
+      FROM times t
+      WHERE t.user_id = $1
+      ORDER BY t.check_in DESC
+    `, [userId]);
+
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ msg: "Error del servidor" });
+  }
 });
 
 module.exports = router;

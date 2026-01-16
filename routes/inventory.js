@@ -1,14 +1,12 @@
 const express = require("express");
+const pool = require("../db"); // Tu conexión PostgreSQL
 const router = express.Router();
-const db = require("../db/index");
 
 // --- Obtener todo el inventario ---
 router.get("/", async (req, res) => {
   try {
-    db.all("SELECT * FROM inventory", [], (err, rows) => {
-      if (err) return res.status(500).json({ error: err.message });
-      res.json(rows);
-    });
+    const result = await pool.query("SELECT * FROM inventory ORDER BY id ASC");
+    res.json(result.rows);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -18,11 +16,9 @@ router.get("/", async (req, res) => {
 router.get("/:id", async (req, res) => {
   const id = req.params.id;
   try {
-    db.get("SELECT * FROM inventory WHERE id = ?", [id], (err, row) => {
-      if (err) return res.status(500).json({ error: err.message });
-      if (!row) return res.status(404).json({ error: "Item no encontrado" });
-      res.json(row);
-    });
+    const result = await pool.query("SELECT * FROM inventory WHERE id = $1", [id]);
+    if (result.rows.length === 0) return res.status(404).json({ error: "Item no encontrado" });
+    res.json(result.rows[0]);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -30,51 +26,20 @@ router.get("/:id", async (req, res) => {
 
 // --- Crear producto ---
 router.post("/", async (req, res) => {
-  console.log("📦 Recibiendo solicitud POST:", req.body);
-  const { 
-    name, 
-    type = "", 
-    unit = "", 
-    stock = 0, 
-    costPerUnit = 0,
-    salary = 0
-  } = req.body;
+  const { name, type = "", unit = "", stock = 0, costPerUnit = 0, salary = 0 } = req.body;
 
-  if (!name || typeof name !== "string") {
-    return res.status(400).json({ error: "Nombre válido requerido" });
-  }
-
-  if (typeof stock !== "number" || stock < 0) {
-    return res.status(400).json({ error: "Stock válido requerido" });
-  }
-
-  if (typeof costPerUnit !== "number" || costPerUnit < 0) {
-    return res.status(400).json({ error: "Costo válido requerido" });
-  }
+  if (!name || typeof name !== "string") return res.status(400).json({ error: "Nombre válido requerido" });
+  if (typeof stock !== "number" || stock < 0) return res.status(400).json({ error: "Stock válido requerido" });
+  if (typeof costPerUnit !== "number" || costPerUnit < 0) return res.status(400).json({ error: "Costo válido requerido" });
 
   try {
-    db.run(
-      "INSERT INTO inventory (name, type, unit, stock, costPerUnit, salary) VALUES (?, ?, ?, ?, ?, ?)", // 6 placeholders
-      [name, type, unit, stock, costPerUnit, salary], // 6 valores
-      function (err) {
-        if (err) {
-          console.error("❌ Error en INSERT:", err.message);
-          return res.status(500).json({ error: err.message });
-        }
-        console.log("✅ Item creado con ID:", this.lastID);
-        res.status(201).json({
-          id: this.lastID,
-          name,
-          type,
-          unit,
-          stock,
-          costPerUnit,
-          salary
-        });
-      }
+    const result = await pool.query(
+      `INSERT INTO inventory (name, type, unit, stock, cost_per_unit, salary)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      [name, type, unit, stock, costPerUnit, salary]
     );
+    res.status(201).json(result.rows[0]);
   } catch (error) {
-    console.error("❌ Error catch:", error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -82,52 +47,25 @@ router.post("/", async (req, res) => {
 // --- Actualizar producto ---
 router.put("/:id", async (req, res) => {
   const id = req.params.id;
-  const { 
-    name, 
-    type = "", 
-    unit = "", 
-    stock = 0,
-    costPerUnit = 0,
-    salary = 0
-  } = req.body;
+  const { name, type = "", unit = "", stock = 0, costPerUnit = 0, salary = 0 } = req.body;
 
-  // Validación
-  if (!name || typeof name !== "string") {
-    return res.status(400).json({ error: "Nombre válido requerido" });
-  }
-  if (typeof stock !== "number" || stock < 0) {
-    return res.status(400).json({ error: "Stock válido requerido" });
-  }
-  if (typeof costPerUnit !== "number" || costPerUnit < 0) {
-    return res.status(400).json({ error: "Costo válido requerido" });
-  }
+  if (!name || typeof name !== "string") return res.status(400).json({ error: "Nombre válido requerido" });
+  if (typeof stock !== "number" || stock < 0) return res.status(400).json({ error: "Stock válido requerido" });
+  if (typeof costPerUnit !== "number" || costPerUnit < 0) return res.status(400).json({ error: "Costo válido requerido" });
 
   try {
-    db.run(
-      "UPDATE inventory SET name=?, type=?, unit=?, stock=?, costPerUnit=?,salary=? WHERE id=?", // Sin coma extra
-      [name, type, unit, stock, costPerUnit, salary, id],
-      function (err) {
-        if (err) {
-          console.error("❌ Error en UPDATE:", err.message);
-          return res.status(500).json({ error: err.message });
-        }
-        if (this.changes === 0) {
-          return res.status(404).json({ error: "Item no encontrado" });
-        }
-        
-        // Obtener y devolver el item actualizado
-        db.get("SELECT * FROM inventory WHERE id = ?", [id], (err, row) => {
-          if (err) {
-            console.error("❌ Error obteniendo item actualizado:", err.message);
-            return res.status(500).json({ error: err.message });
-          }
-          console.log("✅ Item actualizado:", row);
-          res.json(row);
-        });
-      }
+    const updateResult = await pool.query(
+      `UPDATE inventory
+       SET name=$1, type=$2, unit=$3, stock=$4, cost_per_unit=$5, salary=$6
+       WHERE id=$7
+       RETURNING *`,
+      [name, type, unit, stock, costPerUnit, salary, id]
     );
+
+    if (updateResult.rows.length === 0) return res.status(404).json({ error: "Item no encontrado" });
+
+    res.json(updateResult.rows[0]);
   } catch (error) {
-    console.error("❌ Error catch:", error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -136,22 +74,10 @@ router.put("/:id", async (req, res) => {
 router.delete("/:id", async (req, res) => {
   const id = req.params.id;
   try {
-    db.run("DELETE FROM inventory WHERE id = ?", [id], function (err) {
-      if (err) {
-        console.error("❌ Error en DELETE:", err.message);
-        return res.status(500).json({ error: err.message });
-      }
-      if (this.changes === 0) {
-        return res.status(404).json({ error: "Item no encontrado" });
-      }
-      console.log("✅ Item eliminado ID:", id);
-      res.json({ 
-        message: "Item eliminado",
-        id: id
-      });
-    });
+    const deleteResult = await pool.query("DELETE FROM inventory WHERE id = $1 RETURNING *", [id]);
+    if (deleteResult.rows.length === 0) return res.status(404).json({ error: "Item no encontrado" });
+    res.json({ message: "Item eliminado", deleted: deleteResult.rows[0] });
   } catch (error) {
-    console.error("❌ Error catch:", error);
     res.status(500).json({ error: error.message });
   }
 });
